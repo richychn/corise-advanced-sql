@@ -1,0 +1,78 @@
+-- In the following query, I first got the eligible customers by inner joining 
+-- the customer_address with the us_cities. Then, I got the rest of the 
+-- customer information by inner joining with customer_data. Next, I got the 
+-- supplier data and each supplier's geolocation be left joining supplier_info
+-- with us_cities. Then, I cross joined my customer information with supplier
+-- information. For each of those rows, I calculated the distance and ranked them
+-- from closest to furthest. Finally, I selected the columns I needed and filtered
+-- for the closest supplier for each customer.
+
+with distinct_cities as (
+    SELECT
+        city_name,
+        state_abbr,
+        any_value(geo_location) as geo_location
+    FROM vk_data.resources.us_cities
+    GROUP BY 1, 2
+),
+
+eligible_addresses as (
+    SELECT
+        ca.customer_id,
+        UPPER(LTRIM(RTRIM(ca.customer_city))) as customer_city,
+        ca.customer_state,
+        uc.geo_location as customer_geo_location
+    FROM vk_data.customers.customer_address ca
+    INNER JOIN distinct_cities uc 
+        ON UPPER(LTRIM(RTRIM(ca.customer_city))) = uc.city_name
+        AND ca.customer_state = uc.state_abbr
+),
+
+customers as (
+    SELECT 
+        cd.customer_id,
+        cd.first_name as customer_first_name,
+        cd.last_name as customer_last_name,
+        cd.email as customer_email,
+        ea.customer_city,
+        ea.customer_state,
+        ea.customer_geo_location
+    FROM eligible_addresses ea 
+    INNER JOIN vk_data.customers.customer_data cd
+        ON ea.customer_id = cd.customer_id
+),
+
+suppliers as (
+    SELECT
+        si.supplier_id,
+        si.supplier_name,
+        si.supplier_city,
+        si.supplier_state,
+        uc.geo_location as supplier_geo_location
+    FROM vk_data.suppliers.supplier_info si 
+    LEFT JOIN vk_data.resources.us_cities uc 
+        ON UPPER(si.supplier_city) = uc.city_name
+        AND si.supplier_state = uc.state_abbr
+),
+
+distances as (
+    SELECT
+        c.*,
+        s.*,
+        ST_DISTANCE(c.customer_geo_location, s.supplier_geo_location) / 1000 as distance_km,
+        row_number() over(partition by c.customer_id order by distance_km asc) as r
+    FROM customers c 
+    CROSS JOIN suppliers s
+)
+
+SELECT
+    customer_id,
+    customer_first_name,
+    customer_last_name,
+    customer_email,
+    supplier_id,
+    supplier_name,
+    distance_km
+FROM distances
+WHERE r = 1
+ORDER BY customer_last_name, customer_first_name;
