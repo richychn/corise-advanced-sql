@@ -1,0 +1,84 @@
+-- In the following query, I first got the eligible customers like I 
+-- did in previous exercise. Then, I cleaned up the tags and joined them
+-- to the customer data via customer_survey. I used an inner join for the
+-- customer_survey, so we did not have customers who had not responded.
+-- Next, I pivoted the table, so that we have three food preference
+-- columns. Then, I flattened the recipe table, cleaned each tag, and got
+-- one recipe for each tag. Finally, I joined the recipe to the customers
+-- data with the food preferences.
+
+with distinct_cities as (
+    SELECT
+        city_name,
+        state_abbr,
+        any_value(geo_location) as geo_location
+    FROM vk_data.resources.us_cities
+    GROUP BY 1, 2
+),
+
+customers as (
+    SELECT 
+        cd.customer_id,
+        cd.first_name as customer_first_name,
+        cd.email as customer_email
+    FROM vk_data.customers.customer_data cd
+    LEFT JOIN vk_data.customers.customer_address ca 
+        ON cd.customer_id = ca.customer_id
+    INNER JOIN distinct_cities dc 
+        ON UPPER(LTRIM(RTRIM(ca.customer_city))) = dc.city_name
+        AND ca.customer_state = dc.state_abbr
+),
+
+tags as (
+    SELECT 
+        tag_id,
+        LTRIM(RTRIM(tag_property)) as tag
+    FROM vk_data.resources.recipe_tags
+),
+
+preferences as (
+    SELECT 
+        c.customer_id,
+        c.customer_first_name,
+        c.customer_email,
+        t.tag,
+        row_number() over(partition by c.customer_id order by t.tag) as r
+    FROM customers c 
+    INNER JOIN vk_data.customers.customer_survey cs 
+        ON c.customer_id = cs.customer_id
+    LEFT JOIN tags t
+        ON cs.tag_id = t.tag_id
+),
+
+top_preferences as (
+    SELECT * 
+    FROM preferences 
+    pivot (max(tag) for r in (1, 2, 3))
+        as pivot_values (customer_id, customer_first_name, customer_email, food_preference_1, 
+food_preference_2, food_preference_3)
+),
+
+recipes as (
+    SELECT
+        recipe_name,
+        tags.*
+    FROM vk_data.chefs.recipe 
+    , TABLE(flatten(tag_list)) as tags
+),
+
+cleaned_recipes as (
+    SELECT
+        LTRIM(RTRIM(value)) as tag,
+        min(recipe_name) as recipe_name
+    FROM recipes
+    GROUP BY 1
+)
+
+SELECT
+    tp.*,
+    cr.recipe_name
+FROM top_preferences tp 
+LEFT JOIN cleaned_recipes cr 
+    ON tp.food_preference_1 = cr.tag 
+ORDER BY customer_email;
+
