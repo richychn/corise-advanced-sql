@@ -1,0 +1,93 @@
+-- The query profile showed that the only area causing significant processing time is 
+-- when the session_length is being calculated and averaged. In order to keep the query 
+-- efficient, I kept the data asks as separate CTEs to minimize joins. The final join 
+-- combining all the data is at the event_date level, which is scalable with any number 
+-- of events, and only becomes less efficient with significant days past.
+
+with unique_sessions as (
+    SELECT
+        date_trunc('day', event_timestamp) as event_date,
+        count(distinct session_id) as unique_sessions
+    FROM vk_data.events.website_activity
+    GROUP BY 1
+),
+
+session_length as (
+    SELECT
+        date_trunc('day', event_timestamp) as event_date,
+        session_id,
+        timediff('seconds', min(event_timestamp), max(event_timestamp)) as session_length
+    FROM vk_data.events.website_activity
+    GROUP BY 1, 2
+),
+
+avg_session_length as (
+    SELECT
+        event_date,
+        avg(session_length) as avg_session_length
+    FROM session_length
+    GROUP BY 1
+),
+
+first_view_recipe as (
+    SELECT
+        session_id,
+        min(event_timestamp) as recipe_view_time
+    FROM vk_data.events.website_activity
+    WHERE JSON_EXTRACT_PATH_TEXT( event_details , 'event' ) = 'view_recipe'
+    GROUP BY 1
+),
+
+searches_before_recipe as (
+    SELECT
+        date_trunc('day', event_timestamp) as event_date,
+        wa.session_id,
+        count(event_id) as searches_before_recipe
+    FROM vk_data.events.website_activity as wa
+    LEFT JOIN first_view_recipe fvr
+        ON wa.session_id = fvr.session_id
+    WHERE JSON_EXTRACT_PATH_TEXT( wa.event_details , 'event' ) = 'search'
+    AND wa.event_timestamp < fvr.recipe_view_time
+    GROUP BY 1, 2
+),
+
+avg_searches_before_recipe as (
+    SELECT
+        event_date,
+        avg(searches_before_recipe) as avg_searches_before_recipe
+    FROM searches_before_recipe
+    GROUP BY 1
+),
+
+recipe_views as (
+    SELECT
+        date_trunc('day', event_timestamp) as event_date,
+        JSON_EXTRACT_PATH_TEXT( event_details , 'recipe_id' ) as recipe_id,
+        count(event_id) as views,
+        row_number() over(partition by event_date order by views desc) as r
+    FROM vk_data.events.website_activity
+    WHERE JSON_EXTRACT_PATH_TEXT( event_details , 'event' ) = 'view_recipe'
+    GROUP BY 1, 2
+),
+
+most_viewed_recipe as (
+    SELECT
+        event_date,
+        recipe_id
+    FROM recipe_views
+    WHERE r = 1
+)
+
+SELECT
+    us.event_date,
+    us.unique_sessions,
+    asl.avg_session_length,
+    asbr.avg_searches_before_recipe,
+    mvr.recipe_id as most_viewed_recipe_id
+FROM unique_sessions as us 
+LEFT JOIN avg_session_length as asl
+    ON us.event_date = asl.event_date
+LEFT JOIN avg_searches_before_recipe as asbr
+    ON us.event_date = asbr.event_date
+LEFT JOIN most_viewed_recipe as mvr 
+    ON us.event_date = mvr.event_date;
