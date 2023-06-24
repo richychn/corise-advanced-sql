@@ -1,3 +1,7 @@
+/*
+PART 1
+*/
+
 // Get all urgent orders
 with urgent_orders as (
     SELECT
@@ -92,3 +96,11 @@ LEFT JOIN parts_summary ps
     ON cos.c_custkey = ps.c_custkey
 ORDER BY last_order_date DESC
 LIMIT 100;
+
+/*
+PART 2
+
+a. I do not agree with the results returned by the query. It is getting the order numbers of the top 3 line items, not the top 3 orders by spend. 
+b. The code is easy to understand.
+c. Yes, to get the different parts details, pivoting should be faster than joining.
+*/
