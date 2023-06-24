@@ -1,0 +1,93 @@
+// Get all urgent orders
+with urgent_orders as (
+    SELECT
+        c_custkey,
+        o_orderdate,
+        o_totalprice,
+        o_orderkey,
+        max(o_orderdate) over(partition by c_custkey) as last_order_date,
+        // Get row number to find top orders
+        row_number() over(partition by c_custkey order by o_totalprice desc) as 
+top_order_rank
+    FROM customer c 
+    INNER JOIN orders o 
+        ON c.c_custkey = o.o_custkey
+        AND o.o_orderpriority = '1-URGENT'
+),
+
+// Get all information that does not need parts data
+customer_order_summary as (
+    SELECT
+        c_custkey,
+        last_order_date,
+        listagg(o_orderkey, ',') over(partition by c_custkey) as order_numbers,
+        sum(o_totalprice) over(partition by c_custkey) as total_spent
+    FROM urgent_orders uo
+    WHERE top_order_rank <= 3
+),
+
+// Join on lineitem table to get parts data and calculate quantities and spend
+parts as (
+    SELECT 
+        c_custkey,
+        l_partkey,
+        sum(l_quantity) as quantity,
+        sum(l_extendedprice * (1 - l_discount) * (1 + l_tax)) as spend,
+        row_number() over(partition by c_custkey order by spend desc) as 
+top_parts_rank
+    FROM urgent_orders uo 
+    LEFT JOIN lineitem l 
+        ON uo.o_orderkey = l.l_orderkey
+    GROUP BY 1, 2
+    QUALIFY top_parts_rank <= 3
+),
+
+// Get only the columns needed for pivoting
+parts_cols as (
+    SELECT
+        c_custkey,
+        top_parts_rank,
+        l_partkey || '_' || quantity || '_' || spend as agg_data
+    FROM parts
+),
+
+// Pivot and extract data so that we have columns for each part
+parts_summary as (
+    SELECT
+        c_custkey,
+        split_part(part_1_data, '_', 1)::int as part_1_key,
+        split_part(part_1_data, '_', 2)::int as part_1_quantity,
+        split_part(part_1_data, '_', 3)::float as part_1_total_spent,
+        split_part(part_2_data, '_', 1)::int as part_2_key,
+        split_part(part_2_data, '_', 2)::int as part_2_quantity,
+        split_part(part_2_data, '_', 3)::float as part_2_total_spent,
+        split_part(part_3_data, '_', 1)::int as part_3_key,
+        split_part(part_3_data, '_', 2)::int as part_3_quantity,
+        split_part(part_3_data, '_', 3)::float as part_3_total_spent
+    FROM parts_cols
+    PIVOT(max(agg_data) FOR top_parts_rank IN (1, 2, 3))
+        AS p (
+            c_custkey,  
+            part_1_data,
+            part_2_data,
+            part_3_data
+        )
+)
+
+// Join the non-parts data with the parts data
+SELECT
+    cos.*,
+    ps.part_1_key,
+    ps.part_1_quantity,
+    ps.part_1_total_spent,
+    ps.part_2_key,
+    ps.part_2_quantity,
+    ps.part_2_total_spent,
+    ps.part_3_key,
+    ps.part_3_quantity,
+    ps.part_3_total_spent
+FROM customer_order_summary cos 
+LEFT JOIN parts_summary ps 
+    ON cos.c_custkey = ps.c_custkey
+ORDER BY last_order_date DESC
+LIMIT 100;
