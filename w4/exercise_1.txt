@@ -13,6 +13,7 @@ top_order_rank
     INNER JOIN orders o 
         ON c.c_custkey = o.o_custkey
         AND o.o_orderpriority = '1-URGENT'
+    WHERE c.c_mktsegment = 'AUTOMOBILE'
 ),
 
 // Get all information that does not need parts data
