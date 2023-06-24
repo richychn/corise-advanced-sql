@@ -1,8 +1,9 @@
 -- The query profile showed that the only area causing significant processing time is 
 -- when the session_length is being calculated and averaged. In order to keep the query 
--- efficient, I kept the data asks as separate CTEs to minimize joins. The final join 
--- combining all the data is at the event_date level, which is scalable with any number 
--- of events, and only becomes less efficient with significant days past.
+-- efficient, I kept the data asks as separate CTEs to minimize joins. I also created a CTE
+-- to use as a view dataset for two other CTEs, so that I did not have to use the same filter
+-- twice. The final join combining all the data is at the event_date level, which is scalable 
+-- with any number of events, and only becomes less efficient with significant days past.
 
 with unique_sessions as (
     SELECT
@@ -29,12 +30,21 @@ avg_session_length as (
     GROUP BY 1
 ),
 
+view_recipe_activity as (
+    SELECT
+        session_id,
+        event_timestamp,
+        event_details,
+        event_id
+    FROM vk_data.events.website_activity
+    WHERE JSON_EXTRACT_PATH_TEXT( event_details , 'event' ) = 'view_recipe'
+),
+
 first_view_recipe as (
     SELECT
         session_id,
         min(event_timestamp) as recipe_view_time
-    FROM vk_data.events.website_activity
-    WHERE JSON_EXTRACT_PATH_TEXT( event_details , 'event' ) = 'view_recipe'
+    FROM view_recipe_activity
     GROUP BY 1
 ),
 
@@ -65,8 +75,7 @@ recipe_views as (
         JSON_EXTRACT_PATH_TEXT( event_details , 'recipe_id' ) as recipe_id,
         count(event_id) as views,
         row_number() over(partition by event_date order by views desc) as r
-    FROM vk_data.events.website_activity
-    WHERE JSON_EXTRACT_PATH_TEXT( event_details , 'event' ) = 'view_recipe'
+    FROM view_recipe_activity
     GROUP BY 1, 2
 ),
 
