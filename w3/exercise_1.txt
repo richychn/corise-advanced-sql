@@ -73,10 +73,10 @@ recipe_views as (
     SELECT
         date_trunc('day', event_timestamp) as event_date,
         JSON_EXTRACT_PATH_TEXT( event_details , 'recipe_id' ) as recipe_id,
-        count(event_id) as views,
-        row_number() over(partition by event_date order by views desc) as r
+        count(event_id) as views
     FROM view_recipe_activity
     GROUP BY 1, 2
+    QUALIFY row_number() over(partition by event_date order by views desc) = 1
 ),
 
 most_viewed_recipe as (
@@ -84,7 +84,6 @@ most_viewed_recipe as (
         event_date,
         recipe_id
     FROM recipe_views
-    WHERE r = 1
 )
 
 SELECT
